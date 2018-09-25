@@ -1,4 +1,7 @@
+//デモ用。trueならウェブカメラではなくmp4を入力にする
 const DEBUG_DEMO_MP4 = false;
+//trueなら検出された顔の上にランドマークやボックスを描画する
+//また、trueの場合にワーカスレッド側で画像処理されていたらそれを表示する
 const DEBUG_DRAW_FACE = true;
 
 //モデルの位置
@@ -12,10 +15,12 @@ let renderer, scene, camera;
 let body, webcam, input, inputCtx, output, outputCtx;
 let loading, message, width, height, webcamLongSide = 512;
 
+//FPS表示用（メインスレッド側。ワーカスレッド側の速度ではないので注意）
 let stats = new Stats();
 stats.dom.style.display = "none";
 document.body.appendChild(stats.dom);
 
+//THREEのレンダラの初期化
 const initRenderer = async () => {
 	//z-fighting対策でlogarithmicDepthBufferを指定
 	renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true, logarithmicDepthBuffer: true });
@@ -27,23 +32,30 @@ const initRenderer = async () => {
 	renderer.domElement.style.left = "0px";
 	document.body.appendChild(renderer.domElement);
 }
+//THREEのシーンの初期化
 const initScene = async () => {
+	//シーンの作成
 	scene = new THREE.Scene();
 
+	//カメラの作成、シーンへの追加
 	camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 1, 1000);
 	camera.position.set(0, 0, 0);
-
 	scene.add(camera);
 
+	//ライトの作成、シーンへの追加
 	let light = new THREE.AmbientLight(0xffffff, 1.0);
 	scene.add(light);
 
+	//VRMモデルの読み込み
 	let result = await loadModel();
 
 	return result;
 }
 
+//モデルデータ
 let dst = {};
+
+//VRMモデルの読み込み
 const loadModel = async () => {
 	//vrmファイルの読み込み
 	let vrmLoader = new THREE.VRMLoader();
@@ -53,14 +65,17 @@ const loadModel = async () => {
 			vrm.scene.scale.set(scale, scale, scale);
 			vrm.scene.rotation.set(0.0, Math.PI, 0.0);
 
+			//ボーンの取得
 			dst["upperChest"] = vrm.scene.getObjectByName("J_Bip_C_UpperChest");
 			dst["neck"]       = vrm.scene.getObjectByName("J_Bip_C_Neck");
 			dst["head"]       = vrm.scene.getObjectByName("J_Bip_C_Head");
 			dst["upperArmL"]  = vrm.scene.getObjectByName("J_Bip_L_UpperArm");
 			dst["upperArmR"]  = vrm.scene.getObjectByName("J_Bip_R_UpperArm");
+
+			//モーフターゲットの取得
 			dst["face"]      = vrm.scene.getObjectByName("Face", true);
 
-			//腕は下げておく
+			//Tポーズのままだと何なので腕は下げておく
 			let quat = new THREE.Quaternion();
 			let euler = new THREE.Euler(0, 0, Math.PI / 2, "XYZ");
 			quat.setFromEuler(euler);
@@ -69,7 +84,10 @@ const loadModel = async () => {
 			quat.setFromEuler(euler);
 			dst["upperArmR"].rotation.setFromQuaternion(quat);
 
+			//シーンへのモデルの追加
 			scene.add(vrm.scene);
+
+			//読み込み失敗か、カメラから外れているだけかの切り分け用
 			//camera.lookAt(vrm.scene.position);
 
 			return resolve(vrm.scene);
@@ -78,6 +96,7 @@ const loadModel = async () => {
 
 	return result;
 }
+//ウェブカメラの初期化
 const initWebcam = async () => {
 	body = document.createElement("body")
 	webcam = document.getElementById("webcam");
@@ -89,10 +108,11 @@ const initWebcam = async () => {
 	loading = document.getElementById("loading");
 
 	if(DEBUG_DEMO_MP4){
-		//デバッグ用
+		//デバッグ用。mp4からの入力
 		webcam.src = "test.mp4";
 		webcam.loop = true;
 	}else{
+		//ウェブカメラからの入力
 		navigator.getUserMedia = navigator.getUserMedia || navigator.webkitGetUserMedia || navigator.mozGetUserMedia;
 		const stream = await navigator.mediaDevices.getUserMedia({
 			video: { facingMode: "user" },
@@ -106,6 +126,8 @@ const initWebcam = async () => {
 	window.onresize = resize;
 	resize();
 }
+//ブラウザのリサイズ時の処理
+//※とりあえずキャンバスはブラウザのアスペクト比に倣う
 const resize = () => {
 	let w = window.innerWidth;
 	let h = window.innerHeight;
@@ -120,13 +142,14 @@ const resize = () => {
 	webcam.height = input.height = output.height = height;
 }
 
+//各初期化処理が終わったら更新処理を開始する
 let initWorker = false;
 const init = async () => {
 	let resWebcam = initWebcam();
 	let resRenderer = initRenderer();
 	let resScene = initScene();
 
-	//ウェブカム、レンダラ、シーンの初期化が済んでいるか
+	//ウェブカメラ、レンダラ、シーンの初期化が済んでいるか
 	await Promise.all([resWebcam, resRenderer, resScene]);
 
 	//ワーカの初期化も済んでいるか
@@ -138,23 +161,29 @@ const init = async () => {
 
 	stats.dom.style.display = "block";
 
-	//バッファに描いてワーカに送る
+	//ウェブカメラの映像をバッファに描いてワーカスレッドに送る
 	inputCtx.drawImage(webcam, 0, 0, width, height);
 	let buffer = inputCtx.getImageData(0, 0, width, height).data.buffer;
 	worker.postMessage({ type: "detect", buffer: buffer, width: width, height: height }, [buffer]); 
 
+	//更新処理の開始
 	requestAnimationFrame(update);
 }
-
+//更新処理
 const update = async () => {
 	requestAnimationFrame(update);
 
+	//シーンの描画
 	renderer.render(scene, camera);
+	//FPSの更新
 	stats.update();
 }
 
+//初期化処理の開始
 init();
 
+//顔の上にランドマークを描画する
+//https://ibug.doc.ic.ac.uk/resources/facial-point-annotations/
 const drawLandmark = (context, landmark) => {
 	outputCtx.strokeStyle = "rgb(255, 0, 0)";
 	context.beginPath();
@@ -183,6 +212,7 @@ const drawLandmark = (context, landmark) => {
 	context.closePath();
 	context.stroke();
 }
+//顔の上にボックスを描画する
 const drawBox = (context, pose) => {
 	outputCtx.strokeStyle = "rgb(0, 255, 0)";
 	context.beginPath();
@@ -261,7 +291,7 @@ worker.addEventListener("message", (msg) => {
 			}
 		}
 
-		//首の角度
+		//モデルに首の角度を反映
 		if(current >= 0 && angles.length > 0){ 
 			const adj = 0.5;
 			const angle = angles[current];
@@ -273,7 +303,7 @@ worker.addEventListener("message", (msg) => {
 			quat.setFromEuler(euler);
 			dst["neck"].rotation.setFromQuaternion(quat);
 		}
-		//表情
+		//モデルに表情を反映
 		if(current >= 0 && landmarks.length > 0){ 
 			const landmark = landmarks[current];
 
@@ -287,14 +317,18 @@ worker.addEventListener("message", (msg) => {
 			//
 			//   両 下 上 両 下 上
 			//歯 33 34 35 36 37 38
+
 			let eyeL = (landmark[46].y + landmark[47].y) - (landmark[43].y + landmark[44].y);
 			let eyeR = (landmark[40].y + landmark[41].y) - (landmark[37].y + landmark[38].y);
 			let mouthH = landmark[66].y - landmark[62].y;
 
+			//過去の最小値から最大値の範囲（0～1）に対して現在値がどれくらいかを指定する
+			//※あまり良い方法ではないので別のやりかたが思い付いたら変更する
 			maxEyeL = Math.max(eyeL, maxEyeL);
 			minEyeL = Math.min(eyeL, minEyeL);
 			maxEyeR = Math.max(eyeR, maxEyeR);
 			minEyeR = Math.min(eyeR, minEyeR);
+			//※目は閉じるほど1に近付くので注意
 			eyeL = (maxEyeL - eyeL) / (maxEyeL - minEyeL);
 			eyeR = (maxEyeR - eyeR) / (maxEyeR - minEyeR);
 			eyeL = clamp(eyeL);
@@ -319,6 +353,7 @@ worker.addEventListener("message", (msg) => {
 			let width = msg.data.width;
 			let height = msg.data.height;
 
+			//ワーカスレッドから送られてきた画像をキャンバスに描画
 			const imgData = outputCtx.createImageData(width, height);
 			for(let i = 0, j = 0; i < buffer.length; i += channels, j += 4){
 				imgData.data[j] = buffer[i];
@@ -359,6 +394,7 @@ worker.addEventListener("message", (msg) => {
 			outputCtx.drawImage(webcam, 0, 0, width, height);
 		}
 
+		//ワーカスレッド側に画像を送る
 		inputCtx.drawImage(webcam, 0, 0, width, height);
 		let buffer = inputCtx.getImageData(0, 0, width, height).data.buffer;
 		worker.postMessage({ type: "detect", buffer, width, height }, [buffer]); 

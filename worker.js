@@ -1,6 +1,12 @@
+//trueならDNN、falseならカスケード型分類器を顔領域の検出に使用
+//※DNNは正確だが重い。カスケード型分類器は速いが横顔の精度が低く、正面顔も口を開けると精度が落ちる
 const isDNN = true;
-const isLBF = true;
+//trueならHaar-Like特徴（明暗差）、falseならLBP特徴（輝度分布）をカスケード型分類器で使用
+//※顔領域の検出にDNNを使う場合はこのフラグは無視される
 const isHaar = true;
+//trueならLBF、falseならKazemiをランドマークの検出に使用
+//※KazemiはDlibと同じアルゴリズムのはずだが精度が上がらない。パラメータ周りの検証が必要
+const isLBF = true;
 
 let classifierFront;
 let classifierProf;
@@ -9,6 +15,7 @@ let facemark;
 
 let Module = {
 	locateFile: (name) => {
+		//wasmの指定
 		let files = { "opencv_js.wasm": "opencv_js.wasm" }
 		self.postMessage({ type: "locateFile" });
 
@@ -16,13 +23,17 @@ let Module = {
 	},
 	preRun: () => {
 		const dir = "assets/";
+
+		//ランドマークの特徴量
 		const landmark = isLBF ? "lbfmodel.yaml" : "face_landmark_model.dat";
 		Module.FS_createPreloadedFile("/", "landmark", dir + landmark, true, false);
 
 		if(isDNN){
+			//DNNのモデルとウェイト
 			Module.FS_createPreloadedFile("/", "proto", dir + "face_detector.prototxt", true, false);
 			Module.FS_createPreloadedFile("/", "model", dir + "face_detector.caffemodel", true, false);
 		}else{
+			//カスケード型分類器の特徴量
 			const cascadeFront = isHaar ? "haarcascade_frontalface_default.xml" : "lbpcascade_frontalface_improved.xml";
 			Module.FS_createPreloadedFile("/", "cascadeFront", dir + cascadeFront, true, false);
 			const cascadeProf = isHaar ? "haarcascade_profileface.xml" : "lbpcascade_profileface.xml";
@@ -32,12 +43,15 @@ let Module = {
 		self.postMessage({ type: "preRun" });
 	},
 	postRun: () => {
+		//ランドマークの読み込み
 		facemark = isLBF ? cv.createFacemarkLBF() : cv.createFacemarkKazemi();
 		facemark.loadModel("landmark");
 
 		if(isDNN){
+			//DNNの読み込み
 			net = cv.readNetFromCaffe1("proto", "model");
 		}else{
+			//カスケード型分類器の読み込み
 			classifierFront = new cv.CascadeClassifier();
 			classifierFront.load("cascadeFront");
 			classifierProf = new cv.CascadeClassifier();
@@ -51,6 +65,7 @@ let Module = {
 	noImageDecoding: true,
 };
 
+//前フレームとの平均を取ってカク付きを減らすための変数
 let oldRects = undefined;
 let oldLandmarks = undefined;
 let oldRotate = undefined;
@@ -59,13 +74,16 @@ let oldTranslate = undefined;
 self.importScripts("opencv.js");
 self.addEventListener("message", async (msg) =>{
 
+	//グレースケール
 	const cvtGray = (gray) => {
 		cv.cvtColor(gray, gray, cv.COLOR_RGBA2GRAY);
+		//適用的ヒストグラム平坦化
 		let clahe = new cv.CLAHE();
 		clahe.setClipLimit(1);
 		clahe.apply(gray, gray);
 		clahe.delete();
 	}
+	//顔領域の検出
 	const getRect = (gray, rects) => {
 		const scaleFactor = 1.1; //1.1
 		const minNeighbors = 3; //3
@@ -73,6 +91,7 @@ self.addEventListener("message", async (msg) =>{
 		const minSize = new cv.Size(gray.cols * minScale, gray.rows * minScale);
 		let maxArea = 0;
 
+		//正面顔
 		const getRectFront = () => {
 			classifierFront.detectMultiScale(gray, rects, scaleFactor, minNeighbors, 0, minSize);
 			for(let i = 0; i < rects.size(); i++){
@@ -83,6 +102,7 @@ self.addEventListener("message", async (msg) =>{
 
 			return rects.size();
 		}
+		//横顔
 		const getRectProf = (flip) => {
 			//カスケードデータが右向きにしか対応してないので反転
 			if(flip){ cv.flip(gray, gray, 1); }
@@ -91,6 +111,7 @@ self.addEventListener("message", async (msg) =>{
 			classifierProf.detectMultiScale(gray, _rects, scaleFactor, minNeighbors, 0, minSize);
 
 			//大きい領域が取れていたら入れ替え
+			//※現状だと前段で検出できていないのが確定している（rectsが空）のでこの処理だと冗長
 			for(let i = 0; i < _rects.size(); i++){
 				let rect = _rects.get(i);
 				let area = rect.width * rect.height;
@@ -139,6 +160,7 @@ self.addEventListener("message", async (msg) =>{
 		cv.cvtColor(bgr, bgr, cv.COLOR_RGBA2BGR);
 		let size = { width: bgr.cols, height: bgr.rows };
 
+		//平均値。出所は下記
 		//https://github.com/opencv/opencv/tree/master/samples/dnn
 		//To achieve the best accuracy run the model on BGR images resized to 300x300 
 		//applying mean subtraction of values (104, 177, 123) for each blue, green and red channels correspondingly.
@@ -158,9 +180,12 @@ self.addEventListener("message", async (msg) =>{
 			const right  = minmax(data[i + 5], cols);
 			const bottom = minmax(data[i + 6], rows);
 
+			//信頼スコアが低い、または領域の値がおかしいなら検出失敗と見做す
 			if(confidence <= 0.5 || left >= right || top >= bottom){ continue; }
-			const width = (right - left);
+
+			const width = right - left;
 			const height = bottom - top;
+			//横幅と位置を若干補正
 			rects.push_back(new cv.Rect(left - width * 0.1 , top, width * 1.2, height));
 		}
 
@@ -170,9 +195,8 @@ self.addEventListener("message", async (msg) =>{
 
 		return 0;
 	}
+	//カク付きを減らすため、前フレームとの平均を取る
 	const adjRect = (rect) => {
-		//if(isDNN){ return; }
-
 		if(oldRects === undefined){ oldRects = [rect, rect, rect]; }
 		let tmp = [rect.x, rect.y, rect.width, rect.height];
 		for(let i = 0; i < oldRects.length; i++){ 
@@ -189,8 +213,11 @@ self.addEventListener("message", async (msg) =>{
 		for(let i = 0; i < tmp.length; i++){ tmp[i] *= divInv; }
 		rect = new cv.Rect(tmp[0], tmp[1], tmp[2], tmp[3]);
 	}
+	//ランドマークの検出
 	const getLandmark = (gray, rect, landmarks) => {
 		let points = [];
+		//※バインドが失敗するのでOpenCV側に自作関数を追加している
+		//  処理の内容はfit()から引っ張っているだけなのでほぼ同じ
 		let landmark = facemark.fitting(gray, rect);
 		const data = isLBF ? landmark.data64F :  landmark.data32F;
 
@@ -201,9 +228,8 @@ self.addEventListener("message", async (msg) =>{
 		if(points.length > 0){ landmarks.push(points); }
 		landmark.delete();
 	}
+	//カク付きを減らすため、前フレームとの平均を取る
 	const adjLandmark = (landmarks) => {
-		//if(isDNN){ return; }
-
 		let landmark = landmarks[landmarks.length - 1];
 
 		if(oldLandmarks === undefined){ oldLandmarks = [landmark]; }
@@ -227,9 +253,13 @@ self.addEventListener("message", async (msg) =>{
 		}
 		landmark = {...tmp};
 	}
+	//顔向きの計算
 	const getPose = (gray, landmarks, poses, angles) => {
+		//3Dモデルと2D画像の対応から、カメラの姿勢と位置を計算
 		const solvePnP = () => {
 			const landmark = landmarks[landmarks.length - 1];
+
+			//ランドマークのポイントは下記を参考
 			//https://ibug.doc.ic.ac.uk/resources/facial-point-annotations/
 			const _pnp2D = [
 				landmark[30].x, landmark[30].y, //鼻
@@ -239,17 +269,20 @@ self.addEventListener("message", async (msg) =>{
 				landmark[54].x, landmark[54].y, //口左端
 				landmark[48].x, landmark[48].y, //口右端
 			];
-
+			//3Dモデルでの_pnp2Dと対応する各パーツの座標を決め打ち
 			const _pnp3D = [0,0,0, 0,-330,-65, -225,170,-135, 225,170,-135, -150,-150,-125, 150,-150,-125];
 			const pnp2D = cv.matFromArray(6, 1, cv.CV_32FC2, _pnp2D);
 			const pnp3D = cv.matFromArray(6, 1, cv.CV_32FC3, _pnp3D);
 
-			//cv.solvePnPRansac(pnp3D, pnp2D, camera, distCoeffs, oldRotate, oldTranslate, true);
+			//カメラの姿勢と位置を計算
 			cv.solvePnP(pnp3D, pnp2D, camera, distCoeffs, oldRotate, oldTranslate, true);
+			//※Ransacの方がロバスト性が高いが、今回は相性が悪いようなので使わない
+			//cv.solvePnPRansac(pnp3D, pnp2D, camera, distCoeffs, oldRotate, oldTranslate, true);
 
 			pnp2D.delete();
 			pnp3D.delete();
 		}
+		//カメラの姿勢と位置から、任意の3D座標を2D上に射影
 		const projectPoints = (pose) => {
 			const border = 300;
 			const _proj3D = [ 
@@ -262,6 +295,8 @@ self.addEventListener("message", async (msg) =>{
 			const _proj2D = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
 			const proj3D = cv.matFromArray(9, 1, cv.CV_32FC3, _proj3D);
 			let proj2D = cv.matFromArray(9, 1, cv.CV_32FC2, _proj2D);
+
+			//射影
 			cv.projectPoints(proj3D, oldRotate, oldTranslate, camera, distCoeffs, proj2D);
 
 			const data = proj2D.data32F;
@@ -270,9 +305,12 @@ self.addEventListener("message", async (msg) =>{
 			proj2D.delete();
 			proj3D.delete();
 		}
+		//回転角を計算
 		const getAngle = () => {
+			//カメラの姿勢ベクトルを3x3行列に変換
 			let rot3x3 = cv.matFromArray(3, 3, cv.CV_64FC1, [0,0,0, 0,0,0, 0,0,0]);
 			cv.Rodrigues(oldRotate, rot3x3);
+			//3x3行列を3x4行列に変換
 			const r = rot3x3.data64F;
 			const _proj3x4 = [ r[0], r[1], r[2], 0, r[3], r[4], r[5], 0, r[6], r[7], r[8], 0 ];
 			const proj3x4 = cv.matFromArray(3, 4, cv.CV_64FC1, _proj3x4);
@@ -285,6 +323,7 @@ self.addEventListener("message", async (msg) =>{
 			let rotMatZ = new cv.Mat();
 			let eulerAngles = new cv.Mat();
 
+			//射影行列から回転角を計算
 			cv.decomposeProjectionMatrix(proj3x4, cameraMat, rotMat, transVec, rotMatX, rotMatY, rotMatZ, eulerAngles);
 			const yaw   = eulerAngles.data64F[1]; 
 			const pitch = eulerAngles.data64F[0];
@@ -313,10 +352,12 @@ self.addEventListener("message", async (msg) =>{
 
 		solvePnP();
 
+		//顔向きのボックスの座標を取得
 		let pose = [];
 		projectPoints(pose);
 		poses.push(pose);
 
+		//首の傾きを取得
 		angle = getAngle();
 		angles.push(angle);
 
@@ -325,8 +366,12 @@ self.addEventListener("message", async (msg) =>{
 	}
 	switch(msg.data.type){
 	case "detect": {
+		//メインスレッド側から送られてきたバッファからMatを作成
 		let img = new cv.Mat(msg.data.height, msg.data.width, cv.CV_8UC4);
 		img.data.set(new Uint8Array(msg.data.buffer));
+
+		//メインスレッド側に送り返す画像。デフォルトは送られてきたものそのまま
+		//画像処理した結果をキャンバス上で確認したい場合はこれを上書きする
 		let showImg = img.clone();
 
 		let gray = img.clone();
@@ -337,6 +382,7 @@ self.addEventListener("message", async (msg) =>{
 		let boxes = [];
 		let angles = [];
 
+		//顔領域の検出
 		let rects = new cv.RectVector();
 		let direction = isDNN ? getRectDNN(img, rects) : getRect(gray, rects);
 
@@ -345,12 +391,15 @@ self.addEventListener("message", async (msg) =>{
 			//adjRect(rect);
 			faces.push(rect); 
 
+			//ランドマークの検出
 			getLandmark(gray, rect, landmarks);
 			//adjLandmark(landmarks);
 
+			//ボックスの座標の計算
 			getPose(gray, landmarks, boxes, angles);
 		}
 
+		//メインスレッド側に画像を送り返す
 		let channels = showImg.channels();
 		let width = showImg.cols;
 		let height = showImg.rows;
