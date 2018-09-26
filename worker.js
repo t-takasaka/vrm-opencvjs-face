@@ -325,11 +325,14 @@ self.addEventListener("message", async (msg) =>{
 		projectPoints(pose);
 		poses.push(pose);
 
-		//Žñ‚ÌŒX‚«‚ðŽæ“¾
+		//ˆÊ’u‚ÆŽñ‚ÌŒX‚«‚ðŽæ“¾
 		const pitch = oldRotate.data64F[0];
 		const yaw   = oldRotate.data64F[1]; 
 		const roll  = oldRotate.data64F[2];
-		angles.push({ "yaw": yaw, "pitch": pitch, "roll": roll });
+		const x     = oldTranslate.data64F[0];
+		const y     = oldTranslate.data64F[1]; 
+		const z     = oldTranslate.data64F[2];
+		angles.push({ "yaw": yaw, "pitch": pitch, "roll": roll, "x": x, "y": y, "z": z });
 
 		distCoeffs.delete();
 		camera.delete();

@@ -66,11 +66,11 @@ const loadModel = async () => {
 			vrm.scene.rotation.set(0.0, Math.PI, 0.0);
 
 			//ボーンの取得
-			dst["upperChest"] = vrm.scene.getObjectByName("J_Bip_C_UpperChest");
-			dst["neck"]       = vrm.scene.getObjectByName("J_Bip_C_Neck");
-			dst["head"]       = vrm.scene.getObjectByName("J_Bip_C_Head");
-			dst["upperArmL"]  = vrm.scene.getObjectByName("J_Bip_L_UpperArm");
-			dst["upperArmR"]  = vrm.scene.getObjectByName("J_Bip_R_UpperArm");
+			dst["position"]  = vrm.scene.getObjectByName("Position");
+			dst["neck"]      = vrm.scene.getObjectByName("J_Bip_C_Neck");
+			dst["head"]      = vrm.scene.getObjectByName("J_Bip_C_Head");
+			dst["upperArmL"] = vrm.scene.getObjectByName("J_Bip_L_UpperArm");
+			dst["upperArmR"] = vrm.scene.getObjectByName("J_Bip_R_UpperArm");
 
 			//モーフターゲットの取得
 			dst["face"]      = vrm.scene.getObjectByName("Face", true);
@@ -291,16 +291,21 @@ worker.addEventListener("message", (msg) => {
 			}
 		}
 
-		//モデルに首の角度を反映
+		//モデルに位置と首の傾きを反映
 		if(current >= 0 && angles.length > 0){ 
 			const angle = angles[current];
 			let quat = new THREE.Quaternion();
 			let pitch = -angle["pitch"];
-			let yaw = -angle["yaw"];
-			let roll = -angle["roll"];
+			let yaw   = -angle["yaw"];
+			let roll  = -angle["roll"];
 			let euler = new THREE.Euler(pitch, yaw, pitch, "XYZ");
 			quat.setFromEuler(euler);
 			dst["neck"].rotation.setFromQuaternion(quat);
+
+			let x =  angle["x"] * 0.0001;
+			let y =  angle["y"] * 0.0001;
+			let z = -angle["z"] * 0.0001;
+			dst["position"].position.set(x, y, z);
 		}
 		//モデルに表情を反映
 		if(current >= 0 && landmarks.length > 0){ 
