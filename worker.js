@@ -196,6 +196,7 @@ self.addEventListener("message", async (msg) =>{
 		return 0;
 	}
 	//カク付きを減らすため、前フレームとの平均を取る
+	//※平均を取るとカク付きは減るが、動きが若干遅れるように見える
 	const adjRect = (rect) => {
 		if(oldRects === undefined){ oldRects = [rect, rect, rect]; }
 		let tmp = [rect.x, rect.y, rect.width, rect.height];
@@ -229,6 +230,7 @@ self.addEventListener("message", async (msg) =>{
 		landmark.delete();
 	}
 	//カク付きを減らすため、前フレームとの平均を取る
+	//※平均を取るとカク付きは減るが、動きが若干遅れるように見える
 	const adjLandmark = (landmarks) => {
 		let landmark = landmarks[landmarks.length - 1];
 
@@ -305,40 +307,6 @@ self.addEventListener("message", async (msg) =>{
 			proj2D.delete();
 			proj3D.delete();
 		}
-		//回転角を計算
-		const getAngle = () => {
-			//カメラの姿勢ベクトルを3x3行列に変換
-			let rot3x3 = cv.matFromArray(3, 3, cv.CV_64FC1, [0,0,0, 0,0,0, 0,0,0]);
-			cv.Rodrigues(oldRotate, rot3x3);
-			//3x3行列を3x4行列に変換
-			const r = rot3x3.data64F;
-			const _proj3x4 = [ r[0], r[1], r[2], 0, r[3], r[4], r[5], 0, r[6], r[7], r[8], 0 ];
-			const proj3x4 = cv.matFromArray(3, 4, cv.CV_64FC1, _proj3x4);
-
-			let cameraMat = new cv.Mat();
-			let rotMat = new cv.Mat();
-			let transVec = new cv.Mat();
-			let rotMatX = new cv.Mat();
-			let rotMatY = new cv.Mat();
-			let rotMatZ = new cv.Mat();
-			let eulerAngles = new cv.Mat();
-
-			//射影行列から回転角を計算
-			cv.decomposeProjectionMatrix(proj3x4, cameraMat, rotMat, transVec, rotMatX, rotMatY, rotMatZ, eulerAngles);
-			const yaw   = eulerAngles.data64F[1]; 
-			const pitch = eulerAngles.data64F[0];
-			const roll  = eulerAngles.data64F[2];
-
-			eulerAngles.delete();
-			cameraMat.delete();
-			rotMat.delete();
-			transVec.delete();
-			rotMatX.delete();
-			rotMatY.delete();
-			rotMatZ.delete();
-
-			return { "yaw": yaw, "pitch": pitch, "roll": roll };
-		}
 
 		const w = gray.cols, h = gray.rows;
 		const focalLength = Math.max(w, h);
@@ -358,8 +326,10 @@ self.addEventListener("message", async (msg) =>{
 		poses.push(pose);
 
 		//首の傾きを取得
-		angle = getAngle();
-		angles.push(angle);
+		const pitch = oldRotate.data64F[0];
+		const yaw   = oldRotate.data64F[1]; 
+		const roll  = oldRotate.data64F[2];
+		angles.push({ "yaw": yaw, "pitch": pitch, "roll": roll });
 
 		distCoeffs.delete();
 		camera.delete();
@@ -388,12 +358,12 @@ self.addEventListener("message", async (msg) =>{
 
 		for(let i = 0; i < rects.size(); i++){ 
 			let rect = rects.get(i);
-			//adjRect(rect);
+			adjRect(rect);
 			faces.push(rect); 
 
 			//ランドマークの検出
 			getLandmark(gray, rect, landmarks);
-			//adjLandmark(landmarks);
+			adjLandmark(landmarks);
 
 			//ボックスの座標の計算
 			getPose(gray, landmarks, boxes, angles);

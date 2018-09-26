@@ -293,12 +293,11 @@ worker.addEventListener("message", (msg) => {
 
 		//モデルに首の角度を反映
 		if(current >= 0 && angles.length > 0){ 
-			const adj = 0.5;
 			const angle = angles[current];
 			let quat = new THREE.Quaternion();
-			let pitch = -deg2rad(angle["pitch"]) * adj;
-			let yaw = -deg2rad(angle["yaw"]) * adj;
-			let roll = -deg2rad(angle["roll"]) * adj;
+			let pitch = -angle["pitch"];
+			let yaw = -angle["yaw"];
+			let roll = -angle["roll"];
 			let euler = new THREE.Euler(pitch, yaw, pitch, "XYZ");
 			quat.setFromEuler(euler);
 			dst["neck"].rotation.setFromQuaternion(quat);
