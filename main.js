@@ -65,6 +65,36 @@ const loadModel = async () => {
 			vrm.scene.scale.set(scale, scale, scale);
 			vrm.scene.rotation.set(0.0, Math.PI, 0.0);
 
+			// VRMLoader doesn't support VRM Unlit extension yet so
+			// converting all materials to MeshBasicMaterial here as workaround so far.
+			vrm.scene.traverse((object) => {
+				if(!object.material){ return; }
+
+				if(Array.isArray(object.material)){
+					for(let i = 0, il = object.material.length; i < il; i ++){
+						let material = new THREE.MeshBasicMaterial();
+						THREE.Material.prototype.copy.call(material, object.material[i]);
+						material.color.copy(object.material[i].color);
+						material.map = object.material[i].map;
+						material.lights = false;
+						material.skinning = object.material[i].skinning;
+						material.morphTargets = object.material[i].morphTargets;
+						material.morphNormals = object.material[i].morphNormals;
+						object.material[i] = material;
+					}
+				}else{
+					let material = new THREE.MeshBasicMaterial();
+					THREE.Material.prototype.copy.call(material, object.material);
+					material.color.copy(object.material.color);
+					material.map = object.material.map;
+					material.lights = false;
+					material.skinning = object.material.skinning;
+					material.morphTargets = object.material.morphTargets;
+					material.morphNormals = object.material.morphNormals;
+					object.material = material;
+				}
+			});
+
 			//ボーンの取得
 			dst["position"]  = vrm.scene.getObjectByName("Position");
 			dst["neck"]      = vrm.scene.getObjectByName("J_Bip_C_Neck");
